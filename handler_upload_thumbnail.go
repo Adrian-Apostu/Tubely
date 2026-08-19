@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
@@ -12,6 +14,13 @@ import (
 )
 
 func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
+	fileNameBytes := make([]byte, 32)
+	_, err := rand.Read(fileNameBytes)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to generate data", err)
+		return
+	}
+	encodedFileName := base64.RawURLEncoding.EncodeToString(fileNameBytes)
 	videoIDString := r.PathValue("videoID")
 	videoID, err := uuid.Parse(videoIDString)
 	if err != nil {
@@ -53,7 +62,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	assetPath := getAssetPath(videoID, mediaType)
+	assetPath := getAssetPath(encodedFileName, mediaType)
 	assetDiskPath := cfg.getAssetDiskPath(assetPath)
 
 	destination, err := os.Create(assetDiskPath)
