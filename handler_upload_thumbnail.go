@@ -1,9 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/base64"
-	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -14,13 +11,6 @@ import (
 )
 
 func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
-	fileNameBytes := make([]byte, 32)
-	_, err := rand.Read(fileNameBytes)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to generate data", err)
-		return
-	}
-	encodedFileName := base64.RawURLEncoding.EncodeToString(fileNameBytes)
 	videoIDString := r.PathValue("videoID")
 	videoID, err := uuid.Parse(videoIDString)
 	if err != nil {
@@ -40,9 +30,17 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
+	video, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find video", err)
+		return
+	}
+	if video.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Not authorized to update this video", nil)
+		return
+	}
 
-	const maxMemory = 10 << 20
+	const maxMemory = 10 << 20 // 10 MB
 	r.ParseMultipartForm(maxMemory)
 
 	file, header, err := r.FormFile("thumbnail")
@@ -54,7 +52,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type", nil)
+		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type", err)
 		return
 	}
 	if mediaType != "image/jpeg" && mediaType != "image/png" {
@@ -62,38 +60,25 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	assetPath := getAssetPath(encodedFileName, mediaType)
+	assetPath := getAssetPath(mediaType)
 	assetDiskPath := cfg.getAssetDiskPath(assetPath)
 
-	destination, err := os.Create(assetDiskPath)
+	dst, err := os.Create(assetDiskPath)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error creating the new file", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to create file on server", err)
 		return
 	}
-	defer destination.Close()
-
-	if _, err = io.Copy(destination, file); err != nil {
+	defer dst.Close()
+	if _, err = io.Copy(dst, file); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error saving file", err)
-		return
-	}
-
-	video, err := cfg.db.GetVideo(videoID)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't get video", err)
-		return
-	}
-
-	if video.UserID != userID {
-		respondWithError(w, http.StatusUnauthorized, "Not authorized to update this video", err)
 		return
 	}
 
 	url := cfg.getAssetURL(assetPath)
 	video.ThumbnailURL = &url
-
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't update the video", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
 	}
 
